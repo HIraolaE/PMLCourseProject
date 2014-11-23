@@ -1,7 +1,4 @@
----
-title: "Predicting human activity using wearable sensors"
-output: html_document
----
+# Predicting human activity using wearable sensors
 
 This document explains the process to execute the course project corresponding to Practical Machine Learning course from Coursera Data Science specialization taught by Jeff Leek, PhD, Roger D. Peng, PhD, Brian Caffo, PhD. [1]
 
