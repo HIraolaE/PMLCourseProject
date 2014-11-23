@@ -1,0 +1,215 @@
+---
+title: "Predicting human activity using wearable sensors"
+output: html_document
+---
+
+This document explains the process to execute the course project corresponding to Practical Machine Learning course from Coursera Data Science specialization taught by Jeff Leek, PhD, Roger D. Peng, PhD, Brian Caffo, PhD. [1]
+
+The used dataset was made available by a group of researchers in this [website](http://groupware.les.inf.puc-rio.br/har#ixzz3JmoQcfD4)[2]. The goal of the project is creating a prediction algorithm which predicts the different activities made by the users using data from several accelerometers spread across their bodies.
+
+This documents explains the process in different stages. First, we explain the **preprocess** make into the data, including the used **cross validation** strategy. Then we compare two prediction models in our training and cross validation datasets. We finally **select one of the models**.
+
+## Data Preprocessing
+
+First of all, it is important to remind that the dataset was provided already splitted by the instructors into traning and data set. Therefore, it was loaded from the provided repository.[3]
+
+```{r , echo=FALSE,  message=F, warning=F}
+invisible(library(caret))
+##Check if the file exist
+if(!sum(dir() == "pml-training.csv") == 1){
+  #Try to download and unzip the files
+  fileUrl <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+  download.file(fileUrl,"pml-training.csv", method="curl")
+  ##unzipped <- unzip("Dataset.zip")
+}
+pmlData <- read.csv("pml-training.csv")
+##Check if the file exist
+if(!sum(dir() == "pml-testing.csv") == 1){
+  #Try to download and unzip the files
+  fileUrl <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+  download.file(fileUrl,"pml-testing.csv", method="curl")
+  ##unzipped <- unzip("Dataset.zip")
+}
+testingSet <- read.csv("pml-testing.csv")
+```
+
+The original training set provided by the authors has 19622 observations, each one with 160 features. 
+
+
+### Cross validation
+
+A very simple strategy was selected for cross validation, splitting the training data set into traning set itself and cross validation set. 20% of the data from the original training dataset became cross validation set.
+
+```{r  message=F, warning=F}
+inTrain <- createDataPartition(y=pmlData$classe,
+                               p=0.8, list=FALSE)
+trainingSet <- pmlData[inTrain,]
+crossValidationSet <- pmlData[-inTrain,]
+```
+
+This cross validation set will be used to estimate the out of sample error in the analysed models, so one of them can be selected.
+
+The cross validation set has 19622 observations.
+
+### Cleaning data
+
+Once the cross validation set is extracted, the training has 15699 observations that will be used to train the selected methods. But first of all, some preprocessing will be applied to reduce the feature number to create the models.
+
+Before starting any cleaning process, it has been observed that one of the columns(cvtd_timestamp) is loaded as factor. It is a date value, so it is modified.
+
+```{r  message=F, warning=F}
+trainingSet$cvtd_timestamp <- as.Date(trainingSet$cvtd_timestamp, format = "%d/%m/%Y %H:%M")
+crossValidationSet$cvtd_timestamp <- as.Date(crossValidationSet$cvtd_timestamp, format = "%d/%m/%Y %H:%M")
+testingSet$cvtd_timestamp <- as.Date(testingSet$cvtd_timestamp, format = "%d/%m/%Y %H:%M")    
+
+```
+
+The first idea is to remove not valid data. To this end the selected method is to delete all the columns with over 90% invalid data(NAs). This makes the data more manageable as 67 variables were deleted and only 93 were retained.
+
+
+```{r echo=F, message=F, warning=F}
+sumNAs <- apply(trainingSet,2, function(x) sum(is.na(x)))
+nrows <- nrow(x = trainingSet)
+##The columns with over 90% NA values are deleted. 
+##67 columns are removed from the dataset.
+##92 variables are retained.
+selNoNAsIndexes <- which((sumNAs/nrows)<0.9)
+trainingSet <- trainingSet[selNoNAsIndexes]
+crossValidationSet <- crossValidationSet[selNoNAsIndexes]
+testingSet <- testingSet[selNoNAsIndexes]
+```
+The second step is deleting columns with empty values. The selected criteria is deleting columns with over 50% empty values. Once this processing is done, the traning set has 60 features.
+
+```{r echo=F, message=F, warning=F}
+##The columns with over 50% of empty("") values are deleted
+##52 variables are retained
+sumEmpties <- apply(trainingSet,2, function(x) sum(x==""))
+notEmptyIndexes <- which((sumEmpties/nrows)<0.5)
+trainingSet <- trainingSet[notEmptyIndexes]
+crossValidationSet <- crossValidationSet[notEmptyIndexes]
+testingSet <- testingSet[notEmptyIndexes]
+```
+
+The last step is removing the index from the predicting variables because it seem that the observations order was related with the variable we are trying to predict(classe). 
+
+```{r echo=F, message=F, warning=F}
+# remove index
+trainingSet <- trainingSet[-1]
+crossValidationSet <- crossValidationSet[-1]
+testingSet <- testingSet[-1]
+```
+
+At the end of the preprocessing there are 59 variables in the training set, 58 prediction features and the output variable (classe). Some other preprocessing steps to have the same type of variables in each set(traning, cross validation and testing) were made but it doesn worth to explain all the steps here.
+
+```{r echo=F, message=F, warning=F}
+# make all the sets have the same classes
+testingSet$magnet_dumbbell_z <- as.numeric(testingSet$magnet_dumbbell_z)
+testingSet$magnet_forearm_y <- as.numeric(testingSet$magnet_forearm_y)
+testingSet$magnet_forearm_z <- as.numeric(testingSet$magnet_forearm_z)
+testingSet <- testingSet[-59]
+testingSet$classe <- "A"
+
+# all the new_window values are "no" in the testingSet. 
+# It makes R understanding that column as factor but as if there was only one possible value.
+# I make this processing to make this column having 2 possible values.
+testingSet[21,] <- testingSet[20,]
+testSetNewWindowAsCharachter <- as.character(testingSet$new_window)
+testSetNewWindowAsCharachter[21] <- "yes"
+testingSet$new_window <- as.factor(testSetNewWindowAsCharachter)
+testingSet <- testingSet [1:20,]
+
+```
+
+## Model creation
+
+As it has been said above, two different classification algorithms has been calculated to solve our preditction model. The cross validation set will be used to estimate the out of sample errors and select the best model.
+
+The first fitted model is an rpart tree[4]. This model was fitted using the default values in the rpart package as it can be seen in the code below.
+
+```{r  message=F, warning=F}
+library(rpart)
+modelRpart <- rpart(classe ~ .,  data = trainingSet)
+```
+
+```{r echo=F, message=F, warning=F}
+booleansToFactor <- function(x) {
+  index <- which(x == max(x))
+  if (index == 1) { 
+    return ("A") 
+  }else if (index == 2 ){ 
+    return ("B")
+  }else if (index == 3) {
+    return ("C")
+  }else if (index==4) {
+    return ("D")
+  }else {
+    return ("E")
+  }
+}
+
+prediction <- predict(modelRpart, newdata=crossValidationSet)
+predictionClasse <- apply(prediction, 1, booleansToFactor)
+t <- table(crossValidationSet$classe, predictionClasse)
+accuracy2 <- sum(diag(t))/sum(t)
+```
+
+In the following table, you can see a comparisson table of the real class in the cross validation set and the predicted class using the rpart model.
+
+```{r echo=F, message=F, warning=F}
+t 
+```
+
+As you can see in the table above, the obtained out of sample accuracy is ```r accuracy2*100```% and, therefore, the estimated out of sample error is around ```r (1-accuracy2)*100```%.
+
+The second model that has been fitted is a random forest[5]. It has been also fitted using the default options and using 58 predictors to predict the classe variable in the dataset.
+
+This 58 variables have been preprocessed to obtain dummy variables of all the factors, so they are converted to 64 variables.
+
+```{r  message=F, warning=F}
+# create dummy variables from factors
+dummies <- dummyVars(classe ~ ., data = trainingSet)
+trainingSetPredictors <- as.data.frame(predict(dummies, newdata = trainingSet))
+crossValidationSetPredictors <- as.data.frame(predict(dummies, newdata = crossValidationSet))
+testingSetPredictors <- as.data.frame(predict(dummies, newdata = testingSet))
+
+```
+
+The random forest model was fitted using randomForest function from the library of the same name.
+
+```{r  message=F, warning=F}
+library(randomForest)
+modFitRandomForest <- randomForest(trainingSet$classe~., data=trainingSetPredictors)
+```
+
+```{r echo=F, message=F, warning=F}
+predictionRF <- predict(modFitRandomForest, newdata=crossValidationSetPredictors)
+tRF <- table(crossValidationSet$classe, predictionRF)
+accuracy <- sum(diag(tRF))/sum(tRF)
+```
+
+This table compares the real class in the cross validation set and the predicted class using the randomForest model.
+
+```{r echo=F, message=F, warning=F}
+tRF 
+```
+
+
+As you can see in the table above the obtained accuracy is ```r accuracy*100```% and, therefore, the estimated out of sample error is around ``r (1-accuracy)*100```%.
+
+## Selection
+
+The prediction tables comparison crearly leads to select the second model. The random forest is a more complex structure than a rpart tree. However, there is no computational resources problems in that case, so this criteria is not really important. Besides, the difference in the accuracy is big to justify extra computational resources.  
+The random forest function uses 500 trees by default, which means that it computes 500 trees in comparison with the one tree computed in the first model. It seems normal that the accuracy to be much better in that. 
+
+## References
+
+[1] https://www.coursera.org/specialization/jhudatascience/1?utm_medium=listingPage
+
+[2] Ugulino, W.; Cardador, D.; Vega, K.; Velloso, E.; Milidiu, R.; Fuks, H. Wearable Computing: Accelerometers' Data Classification of Body Postures and Movements. Proceedings of 21st Brazilian Symposium on Artificial Intelligence. Advances in Artificial Intelligence - SBIA 2012. In: Lecture Notes in Computer Science. , pp. 52-61. Curitiba, PR: Springer Berlin / Heidelberg, 2012. ISBN 978-3-642-34458-9. DOI: 10.1007/978-3-642-34459-6_6. 
+
+[3] https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv
+Read more: http://groupware.les.inf.puc-rio.br/har#ixzz3JmoQcfD4
+
+[4] http://cran.r-project.org/web/packages/rpart/index.html
+
+[5] http://cran.r-project.org/web/packages/randomForest/index.html
